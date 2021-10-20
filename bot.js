@@ -50,7 +50,7 @@ client.on('messageCreate', (msg) => {
         })
         // end of $balance
     } else if(argv[0] === "$coinflip") {
-        let errMsg = "Correct command is: **$coinflip heads/tails wager** Example ```$coinflip heads $25```";
+        let errMsg = "Correct command is: **$coinflip heads/tails wager** Example ```$coinflip heads 25```";
         let sideGuess = ""; // heads or tails
         if(argv.length === 3 && !containsDigit(argv[1])) {
             argv[1].toLowerCase();
@@ -66,6 +66,7 @@ client.on('messageCreate', (msg) => {
             let wager = parseInt(argv[2]);
             if(wager === NaN || wager < 0) {
                 msg.channel.send("Invalid Wager");
+                return;
             }
             coinflip(msg.author.id, sideGuess, wager, msg);
         } else {
