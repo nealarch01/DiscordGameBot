@@ -1,230 +1,264 @@
-const {Client, Intents, Interaction, Message, Channel} = require("discord.js");
+const { Client, Intents, Interaction, Message, Channel, MessageComponentInteraction, DataResolver } = require("discord.js");
 const config = require("./config.json");
-const client = new Client({ intents: 
-    [Intents.FLAGS.GUILDS, 
-    Intents.FLAGS.GUILD_MESSAGES, 
-    Intents.FLAGS.GUILD_MESSAGE_REACTIONS]
+const client = new Client({
+    intents: [
+        Intents.FLAGS.GUILDS,
+        Intents.FLAGS.GUILD_MESSAGES,
+        Intents.FLAGS.GUILD_MESSAGE_REACTIONS
+    ]
 });
 
-var sqlite3 = require("sqlite3").verbose();
-var database = new sqlite3.Database("members.db");
+var sqlite3 = require("sqlite3").verbose(); //
+var database = new sqlite3.Database("members.db"); // open the database
 
-const cmdPrefix = "$";
+const cmdPrefix = "!";
 
+var usersCollected = new Map(); // userID and the time the user can next collect
 
-client.on("ready", ()=> {
+client.on("ready", () => {
     console.log("Bot is now running");
 })
 
 client.on('messageCreate', (msg) => {
-    if(msg.author.bot) return;
-    var msgData = msg.content;
-    let sCommaFound = () => {
-        containsSingleComma(str);
+    if (msg.author.bot) return;
+    let msgData = msg.content;
+    if (msgData[0] == cmdPrefix) {
+        processCommand(msg, msgData);
     }
-    if(sCommaFound === true) { // do not process data, sql database will crash
+});
+
+// event discordMsg, string messageContent
+async function processCommand(discordMsg, messageContent) {
+    messageContent.toLowerCase();
+    const argv = messageContent.split(" "); // split the message
+    const argc = argv.length; // arg count
+    let userID;
+    let errMsg;
+    switch (argv[0]) {
+        case ("!balance"):
+            if (argc == 2) {
+                userID = argv[1];
+                // remove the non-numeric characters
+                userID = await parseUserID(userID);
+            } else if (argc == 1) {
+                userID = discordMsg.author.id;
+            } else {
+                errMsg = `Incorrect syntax. Example below:
+                \`\`\`!balance @player \nor\n
+                !balance\`\`\``
+                unknownCmd(discordMsg, errMsg);
+                return;
+            }
+            displayBalance(discordMsg, userID);
+            break;
+        case ("!register"):
+            if (argc != 2) {
+                errMsg = `Incorrect syntax. Example below:
+                \`\`\`!register Joe\`\`\``;
+                unknownCmd(discordMsg, errMsg);
+                return;
+            }
+            initMember(discordMsg, argv[1]);
+            break;
+        case ("!name"): // name change command
+            userID = discordMsg.author.id;
+            userID = await parseUserID(userID);
+            if(argc == 1) {
+                unknownCmd(discordMsg, "Enter your name after !name")
+                return;
+            }
+            changeName(userID, argv[1]);
+            break;
+        case ("!claim"):
+            break;
+        case ("!coinflip"):
+            // check size first so we don't get segmentation error or access invalid index
+            if(argc != 3) {
+                errMsg = `Incorrect syntax. Example below:
+                \`\`\`!coinflip heads 50\`\`\``;
+                unknownCmd(discordMsg, err);
+                return;
+            }
+            argv[1].toLowerCase();
+            if(argv[1] != "heads" || argv[1] != "tails" || parseInt(argv[2]) === NaN) {
+                errMsg = `Incorrect syntax. Example below:
+                \`\`\`!coinflip heads 50\`\`\``;
+                unknownCmd(discordMsg, err);
+                return;
+            }
+            coinflip(discordMsg, userID, argv[1].toLowerCase, parseInt(argv[2]));
+            break;
+        case("!craft"): // feature for mineraft, enter the minecraft id or the name of the item, and you will be shown the crafting recipe
+            break; 
+    }
+}
+
+// Purpuse: display error message
+function unknownCmd(discordMsg, errMsg) {
+    discordMsg.channel.send(errMsg);
+}
+
+async function parseUserID(usrID) {
+    usrID = usrID.replace("<@!", "");
+    usrID = usrID.replace(">", "");
+    return usrID;
+}
+
+// clientMsg, userID
+async function displayBalance(discordMsg, userID) {
+    userID = await parseUserID(userID); // safety measure
+    let userBalance;
+    await getBalance(userID).then(result => {
+        userBalance = result;
+    }).catch(err => { console.log("Error"); });
+    console.log(userBalance);
+    if (userBalance === undefined) {
+        discordMsg.channel.send("You don't have an existing balance");
         return;
     }
-    const argv = msgData.split(" ");
-    // Not using switch because no variable declarations
-    if(argv[0] === "$balance") {
-        let queriedUser;
-        if(argv.length === 2) {
-            queriedUser = argv[1];
-            queriedUser = queriedUser.replace("<@!", "");
-            queriedUser = queriedUser.replace(">", "");
-        } else if (argv.length === 1) {
-            queriedUser = msg.author.id;
-        } else {
-            msg.channel.send("Incorrect Syntax");
-            return;
-        }
-        let userBal;
-        getBalance(queriedUser).then(res => {
-            if(res === undefined) {
-                msg.channel.send("No Balance Data");
-            } else {
-                userBal = res.memberBalance;
-                msg.channel.send("Player Balance: **$" + userBal.toString() + "**");
-            }
-        })
-        // end of $balance
-    } else if(argv[0] === "$coinflip") {
-        let errMsg = "Correct command is: **$coinflip heads/tails wager** Example ```$coinflip heads 25```";
-        let sideGuess = ""; // heads or tails
-        if(argv.length === 3 && !containsDigit(argv[1])) {
-            argv[1].toLowerCase();
-            if(argv[1] === "heads" || argv[1] === "head") {
-                sideGuess = 0;
-            } else if(argv[1] === "tails" || "tail") {
-                sideGuess = 1;
-            } else {
-                msg.channel.send(errMsg);
-                return;
-            }
-            argv[2] = argv[2].replace("$", "");
-            let wager = parseInt(argv[2]);
-            if(wager === NaN || wager < 0) {
-                msg.channel.send("Invalid Wager");
-                return;
-            }
-            coinflip(msg.author.id, sideGuess, wager, msg);
-        } else {
-            msg.channel.send(errMsg);
-        }
-    } else if(argv[0] === "$setup") { // set up discord user if they haven't been added into the database
-        const userID_new = msg.author.id;
-        if(argv.length !== 2) {
-            msg.reply("Setup by doing: \"$setup <YourName>\" ```$setup Joe```");
-            return;
-        }
-        doesUserExist(userID_new).then(boolres => {
-            if(boolres === true) {
-                msg.reply("Your account is already in the system!");
-            } else {
-                let insertStmt = "INSERT INTO Members (memberID, memberName, memberBalance) " 
-                                 + "VALUES (" + userID_new + ", " + argv[1] + ", 100);";
-                database.run(insertStmt, function(err) {
-                    if(err) {
-                        console.log("Error adding new user");
-                        throw err;
-                    }
-                })
-            }
-        })
-    }
+    discordMsg.channel.send(`Balance for ${discordMsg.author.username}: $${userBalance}`);
+}
 
-})
-
-/* 
-Promise completion main:
-getBalance(userID).then(result => {
-    // code goes here
-})
-*/
 async function getBalance(userID) {
-    let queryStmt = "SELECT memberBalance FROM Members where memberID = '" + userID + "'";
+    if (containsQuote(userID) === true) return undefined;
+    let queryStmt = `SELECT memberBalance FROM Members WHERE memberID = '${userID}';`;
+    let userExistence;
+    doesUserExist(userID).then(result => {
+        userExistence = result;
+    }).catch(err => {
+        return undefined;
+    });
     return new Promise((resolve, reject) => {
         database.get(queryStmt, (err, rows) => {
-            if(err) { 
-            console.log("Error"); 
-            throw err; 
-        }
-            resolve(rows);
-        })
-    })
+            if (err) {
+                console.log("Error in getBalance");
+                reject(err);
+            }
+            resolve(rows.memberBalance);
+        });
+    });
 }
 
-function containsSingleComma(str) {
-    for(let i = 0; i < str.length; i++) {
-        if(str[i] === "'") {
-            return true;
-        }
-    }
-    return false;
-}
-
-function containsDigit(str) {
-    for(let i = 0; i < str.length; i++) {
-        if(str[i] < 'a' || str[i] > 'z') {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Guess number == 0 (Heads) == 1 (Tails)
-async function coinflip(userID, guessNumber, wager, clientMsg) {
-    var userBalance;
-    await getBalance(userID).then(result => {
-        userBalance = result.memberBalance;
-    })
-    if(userBalance === undefined) {
-        clientMsg.channel.send("No Balance Data");
+async function initMember(discordMsg, name) {
+    let userID = discordMsg.author.id;
+    let userExistence; //
+    await doesUserExist(userID).then(result => {
+        userExistence = result;
+    }).catch(err => {
         return;
-    } else if(wager > userBalance) {
-        clientMsg.channel.send("Not enough $$");
+    });
+    if (userExistence === true) {
+        discordMsg.channel.send("You already have an account!");
         return;
-    } // function to check if the user has a valid balance
-    let coinflipResult = await getRandomInt(0, 1);
-    let boolWin = false;
-    let winLossMsg = "You guessed wrong :(";
-    if(guessNumber === coinflipResult) {
-        boolWin = true;
-        winLossMsg = "You guessed right!";
+    }
+    let queryStmt = `INSERT INTO Members(memberID, memberBalance, ID) VALUES (${userID}, ${name}, 100);`
+    if (containsQuote(queryStmt) === true) {
+        discordMsg.channel.send("Invalid Name");
+        return;
+    }
+    try {
+        // inserting new user into the database
+        database.run(queryStmt, (err) => {
+            if (err) throw err;
+        });
+    } catch (err) {
+        console.log("There was an error initializing a user");
+    }
+}
+
+
+
+async function coinflip(discordMsg, userID, guess, wager) {
+    let userBalance = await getBalance(userID);
+    if (wager > userBalance || wager < 0) {
+        discordMsg.channel.send("Invalid wager");
+        return;
+    }
+    let userExistence;
+    await doesUserExist(userID).then(result => {
+        userExistence = result;
+    }).catch(err => {
+        return;
+    });
+    if (userExistence === false) return;
+    let coinflipRes;
+    if (await getRandomInt(0, 1) === 0) coinflipRes = "heads";
+    else coinflipRes = "tails";
+    if (guess === coinflipRes) {
+        discordMsg.channel.send(`You won +${wager}!`);
+        updateUserBalance(userID, wager);
     } else {
-        wager *= - 1;
+        wager *= -1;
+        discordMsg.channel.send(`You lost -${wager}!`);
+        updateUserBalance(userID, wager);
     }
-    if(coinflipResult === 0) {
-        clientMsg.channel.send("Heads! " + winLossMsg);
-    } else if(coinflipResult === 1) {
-        clientMsg.channel.send("Tails! " + winLossMsg);
-    } else {
-        clientMsg.channel.send("Uh oh, something went wrong :/");
-        return;
-    }
-    changeUserBalance(userID, wager);
 }
 
-// Min and Max are inclusive!!!
+async function updateUserBalance(userID, amount) {
+    let queryStmt = `UPDATE Members SET memberBalance = memberBalance + ${amount} WHERE memberID = ${userID}`;
+    try {
+        database.run(queryStmt, (err) => {
+            if (err) throw (err);
+        });
+    } catch (err) {
+        console.log("Error");
+        return;
+    }
+}
+
+// This function is inclusive of min and max
 async function getRandomInt(min, max) {
     min = Math.floor(min);
     max = Math.floor(max);
-    return Math.floor(Math.random() * ((max + 1) - min)); // max+1 for max inclusivity
+    return Math.floor(Math.random() * ((max + 1) - min));
 }
 
-// string and then int
-async function changeUserBalance(userID, balanceChange) {
-    var prevBalance;
-    await getBalance(userID).then(result => {
-        if(result === undefined) {
-            console.log("Error, could not find balance for", userID);
-        } else {
-            prevBalance = result.memberBalance;
-        }
-    })
-
-    var updatedBalance = prevBalance + balanceChange;
-    let queryStmt = "UPDATE Members SET memberBalance = " + updatedBalance.toString() + " WHERE memberID = " + userID; 
-    database.run(queryStmt, function(err) {
-        if(err) {
-            throw(err);
-        }
-    })
-}
-
-/*
-promise statement
-doesUserExist(userID).then(result => {
-    
-})
-*/
 async function doesUserExist(userID) {
-    let queryStmt = "SELECT memberID FROM Members where memberID = '" + userID + "'";
-    return doesExist = new Promise((resolve, reject) => {
-        database.get(queryStmt, (err, row) => {
-            if(err) {
-                console.log("Error in getting memberID");
-                throw err;
+    let queryStmt = `SELECT memberID FROM Members WHERE memberID = '${userID}'`;
+    return new Promise((resolve, reject) => {
+        database.get(queryStmt, (err, rows) => {
+            if (err) {
+                console.log("Error checking user existence");
+                reject(err);
             }
-            if(row === undefined) {
-                resolve(false);
-            } else {
+            if (userID == rows.memberID) {
                 resolve(true);
+            } else {
+                resolve(false);
             }
-        })
-    })
+        });
+    });
 }
 
-/*db.run('INSERT INTO TemperatureData (location, year) VALUES ($location, $year)', {
-  $location: newRow.location,
-  $year: newRow.year
-}, function(error) {
-  // handle errors here!
+// check if there's a single quote so query won't crash
+async function containsQuote(str) {
+    for (let i = 0; i < str.length; i++) {
+        if (str[i] === '\'' || str[i] === '"') {
+            console.log(str[i]);
+            return true;
+        }
+    }
+    return false;
+}
 
-  console.log(this.lastID);
-}); */
+async function changeName(userID, name) {
+    if(await containsQuote(userID)) {
+        console.log("User ID Contains quotes. In changeName function");
+        return;
+    } 
+    if(await containsQuote(name)) {
+        console.log("New player name contains quotes");
+        return;
+    }
+    let queryStmt = `UPDATE Members SET memberName = '${name}' WHERE memberID = ${userID}`;
+    try {
+        database.run(queryStmt, (err)=> {
+            if(err) throw err;
+        })
+    } catch(err) {
+        console.log("There was an error changing member name");
+        return;
+    }
+}
 
-// Returns an integer
-
-client.login(config.BOT_TOKEN);
+client.login(config.BOT_TOKEN); // <--- create your config.json file with your token
